@@ -2,6 +2,7 @@ package checker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -58,13 +59,46 @@ func (c *httpChecker) Check(ctx context.Context) Result {
 			return false, "", err.Error()
 		}
 		defer resp.Body.Close()
-		_, _ = io.Copy(io.Discard, resp.Body)
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 		if accepted(c.t.ExpectStatus, resp.StatusCode) {
 			return true, fmt.Sprintf("HTTP %d", resp.StatusCode), ""
 		}
-		return false, fmt.Sprintf("HTTP %d", resp.StatusCode),
-			fmt.Sprintf("unexpected status %d", resp.StatusCode)
+		errMsg := fmt.Sprintf("unexpected status %d", resp.StatusCode)
+		if detail := extractErrorBody(bodyBytes); detail != "" {
+			errMsg = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, detail)
+		}
+		return false, fmt.Sprintf("HTTP %d", resp.StatusCode), errMsg
 	})
+}
+
+// extractErrorBody tries to find a human-readable error message in the
+// response body. If the body is JSON with an "error" (or "message") field,
+// that value is returned. Otherwise a trimmed plain-text snippet is used.
+func extractErrorBody(body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	if trimmed == "" {
+		return ""
+	}
+	if strings.HasPrefix(trimmed, "{") {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(trimmed), &payload); err == nil {
+			for _, key := range []string{"error", "message", "detail", "err"} {
+				if v, ok := payload[key]; ok {
+					if s, ok := v.(string); ok && s != "" {
+						return s
+					}
+				}
+			}
+		}
+	}
+	// Strip HTML-ish content and long lines to avoid noisy error text.
+	if strings.Contains(trimmed, "<html") || strings.Contains(trimmed, "<!DOCTYPE") {
+		return ""
+	}
+	if len(trimmed) > 200 {
+		trimmed = trimmed[:200] + "..."
+	}
+	return trimmed
 }
 
 func accepted(list []int, code int) bool {
