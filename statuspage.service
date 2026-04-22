@@ -1,0 +1,20 @@
+[Unit]
+Description=Statuspage — lightweight status monitor
+After=network.target
+
+[Service]
+Type=simple
+User=statuspage
+Group=statuspage
+ExecStart=/usr/local/bin/statuspage --config /etc/statuspage/config.yaml
+Restart=on-failure
+RestartSec=5s
+StateDirectory=statuspage
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/statuspage
+
+[Install]
+WantedBy=multi-user.target

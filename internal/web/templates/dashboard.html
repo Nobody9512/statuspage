@@ -1,0 +1,60 @@
+{{ define "content" }}
+<div class="banner {{ .Banner.Class }}">{{ .Banner.Text }}</div>
+
+<div class="section-label">Uptime over the past {{ .Window }} days.</div>
+
+<div class="services">
+  {{ range .Services }}
+  <div class="service">
+    <div class="head">
+      <div class="name"><a href="/service/{{ .NameEscaped }}">{{ .Name }}</a></div>
+      <div class="status {{ .StatusClass }}">{{ .StatusLabel }}</div>
+    </div>
+    <div class="strip">
+      {{ range .Days }}
+      <div class="day {{ .Class }}">
+        <div class="tt">
+          <div class="d">{{ .DateLabel }}</div>
+          <div class="summary">{{ .Summary }}</div>
+          {{ if .RelatedTitle }}
+          <div class="r">Related</div>
+          <div class="r-item">{{ .RelatedTitle }}</div>
+          {{ end }}
+        </div>
+      </div>
+      {{ end }}
+    </div>
+    <div class="footer">
+      <span>{{ $.Window }} days ago</span>
+      <span class="sep"></span>
+      <span class="uptime">{{ .UptimeLabel }}</span>
+      <span class="sep"></span>
+      <span>Today</span>
+    </div>
+  </div>
+  {{ end }}
+</div>
+
+<h2 class="past">Past Incidents</h2>
+{{ range .PastDays }}
+<div class="day-block">
+  <h3>{{ .DateLabel }}</h3>
+  {{ if .Incidents }}
+    {{ range .Incidents }}
+    <div class="incident">
+      <div class="title {{ if not .Resolved }}down{{ end }}">{{ .Title }}</div>
+      {{ if .Resolved }}
+      <div class="line"><span class="tag resolved">Resolved</span> - This incident has been resolved.</div>
+      <div class="time">{{ .ResolvedLabel }}</div>
+      {{ else }}
+      <div class="line"><span class="tag investigating">Investigating</span> - {{ .LastError }}</div>
+      {{ end }}
+      <div class="time">{{ .StartedLabel }}</div>
+    </div>
+    {{ end }}
+  {{ else }}
+    <div class="empty">No incidents reported{{ if .IsToday }} today{{ end }}.</div>
+  {{ end }}
+</div>
+{{ end }}
+{{ end }}

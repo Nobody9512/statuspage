@@ -1,0 +1,16 @@
+# Compiled binary
+/statuspage
+/monitor
+
+# Local / runtime files
+/config.yaml
+/config.smoke.yaml
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editor / OS junk
+.idea/
+.vscode/
+.DS_Store

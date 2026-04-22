@@ -1,0 +1,80 @@
+server:
+  listen: "127.0.0.1:8088"
+  auto_refresh_seconds: 30
+  brand_name: "My Company"
+  basic_auth:
+    # Leave both empty to disable authentication.
+    user: ""
+    password: ""
+
+scheduler:
+  interval_minutes: 5
+  retention_days: 90
+  check_timeout_seconds: 10
+
+storage:
+  sqlite_path: "/var/lib/statuspage/statuspage.db"
+
+notifier:
+  # Email alerts fire when an incident stays open longer than the threshold,
+  # and again when the service recovers. Never duplicated.
+  enabled: false
+  down_threshold_minutes: 15
+  smtp:
+    host: "smtp.example.com"
+    port: 587
+    username: "alerts@example.com"
+    password: "REPLACE_ME"
+    from: "Statuspage <alerts@example.com>"
+    to:
+      - "you@example.com"
+
+# Each target is one health check, evaluated every `scheduler.interval_minutes`.
+# Supported types: http, soap, postgres, redis, tcp, laravel_jobs
+targets:
+  # --- HTTP / REST APIs ---------------------------------------------------
+  - name: "Public website"
+    type: http
+    url: "https://example.com/"
+    expect_status: [200]
+
+  - name: "Internal REST API"
+    type: http
+    url: "https://api.example.com/health"
+    method: GET
+    headers:
+      Authorization: "Bearer REPLACE_ME"
+    expect_status: [200]
+    timeout_seconds: 10
+
+  # --- SOAP service -------------------------------------------------------
+  - name: "Legacy SOAP endpoint"
+    type: soap
+    url: "https://soap.example.com/Service.svc"
+    soap_action: "http://tempuri.org/IService/Login"
+    timeout_seconds: 15
+
+  # --- Databases ----------------------------------------------------------
+  - name: "Primary Postgres"
+    type: postgres
+    dsn: "postgres://user:pass@db.internal:5432/appdb?sslmode=disable"
+
+  # --- Cache --------------------------------------------------------------
+  - name: "Redis"
+    type: redis
+    addr: "redis.internal:6379"
+    password: ""
+    db: 0
+
+  # --- Raw TCP port -------------------------------------------------------
+  - name: "SMTP port"
+    type: tcp
+    addr: "mail.internal:25"
+    timeout_seconds: 3
+
+  # --- Laravel queue (failed_jobs + stale reserved jobs) ------------------
+  - name: "Laravel queue"
+    type: laravel_jobs
+    dsn: "postgres://user:pass@db.internal:5432/appdb?sslmode=disable"
+    fail_threshold: 10
+    stale_reserved_minutes: 15
