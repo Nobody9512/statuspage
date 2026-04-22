@@ -47,6 +47,10 @@ func (c *httpChecker) Check(ctx context.Context) Result {
 			return false, "", fmt.Sprintf("build request: %v", err)
 		}
 		for k, v := range c.t.Headers {
+			if strings.EqualFold(k, "Host") {
+				req.Host = v
+				continue
+			}
 			req.Header.Set(k, v)
 		}
 		resp, err := c.client.Do(req)
