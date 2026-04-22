@@ -1,6 +1,8 @@
 # Statuspage
 
-A small, self-hosted status page written in Go. It periodically pings your services (HTTP APIs, SOAP endpoints, PostgreSQL, Redis, TCP ports, Laravel queues), stores the results in SQLite, renders a clean status page in the style of Anthropic / GitHub, and emails you when something stays broken.
+A small, self-hosted status page written in Go. It periodically pings your services (HTTP APIs, SOAP endpoints, PostgreSQL, Redis, TCP ports, Laravel queues), stores the results in SQLite, renders a clean modern status page, and emails you when something stays broken.
+
+![Statuspage dashboard](docs/screenshot.png)
 
 - **One static binary** — no runtime dependencies, no CGO
 - **YAML config** — every target is a few lines
