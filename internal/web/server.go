@@ -1,8 +1,10 @@
 package web
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -11,6 +13,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,7 +24,12 @@ import (
 //go:embed templates/*.html
 var templatesFS embed.FS
 
-const windowDays = 90
+const (
+	windowDays        = 90
+	adminCookieName   = "sp_admin"
+	adminSessionTTL   = 12 * time.Hour
+	publicErrorText   = "Service disruption detected."
+)
 
 type Server struct {
 	cfg       config.ServerConfig
@@ -31,6 +39,9 @@ type Server struct {
 	store     *storage.Store
 	tmpl      *template.Template
 	lastCycle atomic.Value
+
+	adminMu       sync.Mutex
+	adminSessions map[string]time.Time
 }
 
 func New(cfg config.ServerConfig, refreshSeconds int, targets []config.Target, store *storage.Store) (*Server, error) {
@@ -46,6 +57,7 @@ func New(cfg config.ServerConfig, refreshSeconds int, targets []config.Target, s
 		cfg: cfg, refresh: refreshSeconds,
 		targets: targets, targetMap: tm,
 		store: store, tmpl: tmpl,
+		adminSessions: map[string]time.Time{},
 	}
 	s.lastCycle.Store(time.Time{})
 	return s, nil
@@ -58,6 +70,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/", s.handleDashboard)
 	mux.HandleFunc("/service/", s.handleService)
 	mux.HandleFunc("/api/checks/", s.handleAPIChecks)
+	mux.HandleFunc("/admin/login", s.handleAdminLogin)
+	mux.HandleFunc("/admin/logout", s.handleAdminLogout)
 	return s.basicAuth(mux)
 }
 
@@ -78,6 +92,93 @@ func (s *Server) basicAuth(next http.Handler) http.Handler {
 	})
 }
 
+// --- admin auth ---------------------------------------------------
+
+func (s *Server) adminEnabled() bool {
+	return s.cfg.Admin.User != "" && s.cfg.Admin.Password != ""
+}
+
+func (s *Server) isAdmin(r *http.Request) bool {
+	if !s.adminEnabled() {
+		return false
+	}
+	c, err := r.Cookie(adminCookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	s.adminMu.Lock()
+	defer s.adminMu.Unlock()
+	exp, ok := s.adminSessions[c.Value]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(s.adminSessions, c.Value)
+		return false
+	}
+	return true
+}
+
+func (s *Server) newAdminSession() (string, time.Time) {
+	buf := make([]byte, 32)
+	_, _ = rand.Read(buf)
+	token := hex.EncodeToString(buf)
+	exp := time.Now().Add(adminSessionTTL)
+	s.adminMu.Lock()
+	s.adminSessions[token] = exp
+	// opportunistic cleanup
+	now := time.Now()
+	for k, v := range s.adminSessions {
+		if now.After(v) {
+			delete(s.adminSessions, k)
+		}
+	}
+	s.adminMu.Unlock()
+	return token, exp
+}
+
+func (s *Server) handleAdminLogin(w http.ResponseWriter, r *http.Request) {
+	if !s.adminEnabled() {
+		http.Error(w, "Admin mode is not configured.", http.StatusNotFound)
+		return
+	}
+	u, p, ok := r.BasicAuth()
+	if !ok ||
+		subtle.ConstantTimeCompare([]byte(u), []byte(s.cfg.Admin.User)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(p), []byte(s.cfg.Admin.Password)) != 1 {
+		w.Header().Set("WWW-Authenticate", `Basic realm="Statuspage Admin"`)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	token, exp := s.newAdminSession()
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCookieName,
+		Value:    token,
+		Path:     "/",
+		Expires:  exp,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleAdminLogout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(adminCookieName); err == nil && c.Value != "" {
+		s.adminMu.Lock()
+		delete(s.adminSessions, c.Value)
+		s.adminMu.Unlock()
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCookieName,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
 // --- view models --------------------------------------------------
 
 type dayCell struct {
@@ -88,13 +189,13 @@ type dayCell struct {
 }
 
 type serviceCard struct {
-	Name         string
-	NameEscaped  string
-	StatusClass  string
-	StatusLabel  string
-	BannerClass  string
-	UptimeLabel  string
-	Days         []dayCell
+	Name        string
+	NameEscaped string
+	StatusClass string
+	StatusLabel string
+	BannerClass string
+	UptimeLabel string
+	Days        []dayCell
 }
 
 type incidentEntry struct {
@@ -125,6 +226,7 @@ type dashboardData struct {
 	Banner      banner
 	Services    []serviceCard
 	PastDays    []pastDay
+	IsAdmin     bool
 }
 
 type serviceData struct {
@@ -135,6 +237,7 @@ type serviceData struct {
 	Window      int
 	Service     serviceCard
 	PastDays    []pastDay
+	IsAdmin     bool
 }
 
 // --- handlers -----------------------------------------------------
@@ -144,6 +247,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	isAdmin := s.isAdmin(r)
 	now := time.Now()
 	since := now.Add(-windowDays * 24 * time.Hour)
 	since7d := now.Add(-7 * 24 * time.Hour)
@@ -152,7 +256,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	anyDown := 0
 	anyWarn := 0
 	for _, t := range s.targets {
-		card := s.buildCard(t, since, now)
+		card := s.buildCard(t, since, now, isAdmin)
 		if card.StatusClass == "down" {
 			anyDown++
 		} else if card.StatusClass == "warn" {
@@ -170,7 +274,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	b := computeBanner(anyDown, anyWarn, len(cards))
 
-	past, _ := s.buildPastDays("", since7d, now)
+	past, _ := s.buildPastDays("", since7d, now, isAdmin)
 
 	s.render(w, "dashboard.html", dashboardData{
 		Title:       "Dashboard",
@@ -181,6 +285,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Banner:      b,
 		Services:    cards,
 		PastDays:    past,
+		IsAdmin:     isAdmin,
 	})
 }
 
@@ -194,11 +299,12 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	isAdmin := s.isAdmin(r)
 	now := time.Now()
 	since := now.Add(-windowDays * 24 * time.Hour)
 
-	card := s.buildCard(t, since, now)
-	past, _ := s.buildPastDays(name, since, now)
+	card := s.buildCard(t, since, now, isAdmin)
+	past, _ := s.buildPastDays(name, since, now, isAdmin)
 
 	s.render(w, "service.html", serviceData{
 		Title:       name,
@@ -208,6 +314,7 @@ func (s *Server) handleService(w http.ResponseWriter, r *http.Request) {
 		Window:      windowDays,
 		Service:     card,
 		PastDays:    past,
+		IsAdmin:     isAdmin,
 	})
 }
 
@@ -220,6 +327,7 @@ func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	isAdmin := s.isAdmin(r)
 	days := 7
 	if v := r.URL.Query().Get("days"); v != "" {
 		fmt.Sscanf(v, "%d", &days)
@@ -236,13 +344,21 @@ func (s *Server) handleAPIChecks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if !isAdmin {
+		for i := range checks {
+			if checks[i].Status != storage.StatusOK && checks[i].Error != "" {
+				checks[i].Error = publicErrorText
+			}
+			checks[i].Detail = ""
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(checks)
 }
 
 // --- builders -----------------------------------------------------
 
-func (s *Server) buildCard(t config.Target, since, until time.Time) serviceCard {
+func (s *Server) buildCard(t config.Target, since, until time.Time, isAdmin bool) serviceCard {
 	latest, _ := s.store.LatestCheck(t.Name)
 	uptime, total, _ := s.store.UptimePercent(t.Name, since)
 	rollup, _ := s.store.DailyRollup(t.Name, since, until)
@@ -270,7 +386,7 @@ func (s *Server) buildCard(t config.Target, since, until time.Time) serviceCard 
 			cell.Summary = fmt.Sprintf("%d of %d checks failed (%.1f%% down).", r.Down, r.Total, downPct)
 		}
 		if list, ok := incByDay[r.Date.Format("2006-01-02")]; ok && len(list) > 0 {
-			cell.RelatedTitle = incidentTitle(list[0])
+			cell.RelatedTitle = incidentTitle(list[0], isAdmin)
 		}
 		days[i] = cell
 	}
@@ -304,7 +420,7 @@ func (s *Server) buildCard(t config.Target, since, until time.Time) serviceCard 
 	return card
 }
 
-func (s *Server) buildPastDays(target string, since, until time.Time) ([]pastDay, error) {
+func (s *Server) buildPastDays(target string, since, until time.Time, isAdmin bool) ([]pastDay, error) {
 	var incidents []storage.Incident
 	var err error
 	if target == "" {
@@ -327,7 +443,7 @@ func (s *Server) buildPastDays(target string, since, until time.Time) ([]pastDay
 		}
 		if list, ok := byDay[key]; ok {
 			for _, inc := range list {
-				block.Incidents = append(block.Incidents, incidentEntryFrom(inc, target == ""))
+				block.Incidents = append(block.Incidents, incidentEntryFrom(inc, target == "", isAdmin))
 			}
 		}
 		days = append(days, block)
@@ -344,11 +460,11 @@ func groupIncidentsByDay(list []storage.Incident) map[string][]storage.Incident 
 	return out
 }
 
-func incidentEntryFrom(inc storage.Incident, includeTarget bool) incidentEntry {
+func incidentEntryFrom(inc storage.Incident, includeTarget bool, isAdmin bool) incidentEntry {
 	entry := incidentEntry{
-		Title:        incidentTitle(inc),
+		Title:        incidentTitle(inc, isAdmin),
 		Resolved:     inc.ResolvedAt != nil,
-		LastError:    inc.LastError,
+		LastError:    publicIncidentMessage(inc, isAdmin),
 		StartedLabel: inc.StartedAt.UTC().Format("Jan 2, 15:04 UTC"),
 	}
 	if inc.ResolvedAt != nil {
@@ -358,15 +474,25 @@ func incidentEntryFrom(inc storage.Incident, includeTarget bool) incidentEntry {
 	return entry
 }
 
-func incidentTitle(inc storage.Incident) string {
-	if inc.LastError == "" {
-		return fmt.Sprintf("%s outage", inc.Target)
+func incidentTitle(inc storage.Incident, isAdmin bool) string {
+	if isAdmin {
+		if inc.LastError == "" {
+			return fmt.Sprintf("%s outage", inc.Target)
+		}
+		msg := inc.LastError
+		if len(msg) > 80 {
+			msg = msg[:80] + "..."
+		}
+		return fmt.Sprintf("%s: %s", inc.Target, msg)
 	}
-	msg := inc.LastError
-	if len(msg) > 80 {
-		msg = msg[:80] + "..."
+	return fmt.Sprintf("%s — service disruption", inc.Target)
+}
+
+func publicIncidentMessage(inc storage.Incident, isAdmin bool) string {
+	if isAdmin {
+		return inc.LastError
 	}
-	return fmt.Sprintf("%s: %s", inc.Target, msg)
+	return publicErrorText
 }
 
 func computeBanner(down, warn, total int) banner {

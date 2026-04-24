@@ -6,6 +6,12 @@ server:
     # Leave both empty to disable authentication.
     user: ""
     password: ""
+  admin:
+    # Admin login via /admin/login (Basic auth). When logged in, full
+    # technical error details are shown instead of the short public message.
+    # Leave both empty to disable the admin mode.
+    user: ""
+    password: ""
 
 scheduler:
   interval_minutes: 5

@@ -22,9 +22,15 @@ type ServerConfig struct {
 	AutoRefreshSeconds int       `yaml:"auto_refresh_seconds"`
 	BrandName          string    `yaml:"brand_name"`
 	BasicAuth          BasicAuth `yaml:"basic_auth"`
+	Admin              Admin     `yaml:"admin"`
 }
 
 type BasicAuth struct {
+	User     string `yaml:"user"`
+	Password string `yaml:"password"`
+}
+
+type Admin struct {
 	User     string `yaml:"user"`
 	Password string `yaml:"password"`
 }

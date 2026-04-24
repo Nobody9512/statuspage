@@ -5,6 +5,7 @@
 # Local / runtime files
 /config.yaml
 /config.smoke.yaml
+/config.local.yaml
 *.db
 *.db-journal
 *.db-wal

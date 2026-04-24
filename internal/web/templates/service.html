@@ -45,6 +45,7 @@
       <div class="title {{ if not .Resolved }}down{{ end }}">{{ .Title }}</div>
       {{ if .Resolved }}
       <div class="line"><span class="tag resolved">Resolved</span> - This incident has been resolved.</div>
+      {{ if and $.IsAdmin .LastError }}<div class="line admin-detail">{{ .LastError }}</div>{{ end }}
       <div class="time">{{ .ResolvedLabel }}</div>
       {{ else }}
       <div class="line"><span class="tag investigating">Investigating</span> - {{ .LastError }}</div>
