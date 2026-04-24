@@ -37,6 +37,18 @@
     }
     header.top .meta { font-size: 12px; color: var(--muted); }
     header.top .meta a { color: var(--link); }
+    header.top .meta .admin-tag {
+      display: inline-block;
+      background: var(--ink);
+      color: white;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: 2px 6px;
+      border-radius: 3px;
+      vertical-align: 2px;
+    }
 
     .banner {
       background: var(--ok);
@@ -163,6 +175,18 @@
     .incident .line .tag.resolved { color: var(--ok); }
     .incident .line .tag.investigating { color: var(--warn); }
     .incident .time { font-size: 12px; color: var(--muted); }
+    .incident .line.admin-detail {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: var(--muted);
+      background: #f2f1ec;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 8px 10px;
+      margin-top: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
 
     .back { font-family: ui-sans-serif, -apple-system, "Segoe UI", sans-serif; font-size: 14px; color: var(--link); text-decoration: none; }
     .back:hover { text-decoration: underline; }
@@ -178,7 +202,7 @@
   <div class="wrap">
     <header class="top">
       <h1>{{ .Brand }}</h1>
-      <div class="meta">Last cycle: {{ .LastCycle }} · <a href="/">Dashboard</a></div>
+      <div class="meta">Last cycle: {{ .LastCycle }} · <a href="/">Dashboard</a>{{ if .IsAdmin }} · <span class="admin-tag">admin</span> · <a href="/admin/logout">logout</a>{{ end }}</div>
     </header>
     {{ template "content" . }}
   </div>
