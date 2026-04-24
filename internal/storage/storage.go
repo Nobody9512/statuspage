@@ -98,6 +98,35 @@ func (s *Store) SaveCheck(c Check) error {
 	return err
 }
 
+// SaveChecksBulk inserts many checks inside a single transaction. Used by
+// the demo seeder; the live checker inserts one row at a time.
+func (s *Store) SaveChecksBulk(checks []Check) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO checks(target, checked_at, status, latency_ms, error, detail) VALUES (?,?,?,?,?,?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	for _, c := range checks {
+		if _, err := stmt.Exec(c.Target, c.CheckedAt.Unix(), string(c.Status), c.LatencyMs, c.Error, c.Detail); err != nil {
+			_ = stmt.Close()
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	if err := stmt.Close(); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) GetOpenIncident(target string) (*Incident, error) {
 	row := s.db.QueryRow(
 		`SELECT id, target, started_at, resolved_at, last_error, down_email_sent, recovered_email_sent
